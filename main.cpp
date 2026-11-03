@@ -1,8 +1,8 @@
 // ============================================================================
-//  Auto Clicker (WinAPI)
+//  AutoClickerCpp (WinAPI)
 //  - Показывает точные координаты курсора (GetCursorPos) в реальном времени
 //  - ПРОБЕЛ включает/выключает имитацию кликов мыши (хук WH_KEYBOARD_LL)
-//  - Интервал кликов настраивается в config.ini (фикс. или случайный min-max)
+//  - Режимы: fixed / random / precision, настройка через config.ini
 // ============================================================================
 
 #ifndef UNICODE
@@ -22,14 +22,29 @@
 // ---------------------------------------------------------------------------
 // Конфигурация автокликера (читается из config.ini рядом с исполняемым файлом)
 // ---------------------------------------------------------------------------
+enum class ClickMode
+{
+    Fixed,
+    Random,
+    Precision
+};
+
 struct ClickConfig
 {
-    bool useRandom     = false; // случайный интервал (true) или фиксированный
-    int  fixedInterval = 100;   // фиксированный интервал, мс
-    int  minInterval   = 50;    // минимальный интервал (случайный режим), мс
-    int  maxInterval   = 200;   // максимальный интервал (случайный режим), мс
-    int  pressDelayMin = 10;    // минимальная задержка между DOWN и UP, мс
-    int  pressDelayMax = 50;    // максимальная задержка между DOWN и UP, мс
+    ClickMode mode       = ClickMode::Fixed;
+    int  fixedInterval   = 100;   // fixed_interval, мс
+    int  intervalMin     = 50;    // interval_min, мс
+    int  intervalMax     = 200;   // interval_max, мс
+    int  pressDelayMin   = 10;    // down_delay_min, мс
+    int  pressDelayMax   = 50;    // down_delay_max, мс
+
+    // precision-режим: прямоугольная область для кликов (экранные координаты)
+    int  precisionMinX   = 0;
+    int  precisionMinY   = 0;
+    int  precisionMaxX   = 800;
+    int  precisionMaxY   = 600;
+
+    bool showDebugWindow = true;  // показывать окно приложения
 };
 
 static ClickConfig g_config;
@@ -101,21 +116,26 @@ static void LoadConfig()
         std::string val = Trim(line.substr(eq + 1));
 
         if (key == "mode")
-            g_config.useRandom = (ToLower(val) == "random");
-        else if (key == "interval")
+        {
+            std::string m = ToLower(val);
+            if (m == "random")        g_config.mode = ClickMode::Random;
+            else if (m == "precision") g_config.mode = ClickMode::Precision;
+            else                      g_config.mode = ClickMode::Fixed;
+        }
+        else if (key == "fixed_interval")
         {
             int v = atoi(val.c_str());
             if (v > 0) g_config.fixedInterval = v;
         }
-        else if (key == "min")
+        else if (key == "interval_min")
         {
             int v = atoi(val.c_str());
-            if (v > 0) g_config.minInterval = v;
+            if (v > 0) g_config.intervalMin = v;
         }
-        else if (key == "max")
+        else if (key == "interval_max")
         {
             int v = atoi(val.c_str());
-            if (v > 0) g_config.maxInterval = v;
+            if (v > 0) g_config.intervalMax = v;
         }
         else if (key == "down_delay_min")
         {
@@ -127,14 +147,28 @@ static void LoadConfig()
             int v = atoi(val.c_str());
             if (v >= 0) g_config.pressDelayMax = v;
         }
+        else if (key == "precision_min_x")
+            g_config.precisionMinX = atoi(val.c_str());
+        else if (key == "precision_min_y")
+            g_config.precisionMinY = atoi(val.c_str());
+        else if (key == "precision_max_x")
+            g_config.precisionMaxX = atoi(val.c_str());
+        else if (key == "precision_max_y")
+            g_config.precisionMaxY = atoi(val.c_str());
+        else if (key == "show_debug_window")
+        {
+            std::string v = ToLower(val);
+            g_config.showDebugWindow = (v == "true" || v == "1" ||
+                                        v == "yes" || v == "on");
+        }
     }
 
     // Гарантируем корректные диапазоны min <= max
-    if (g_config.minInterval > g_config.maxInterval)
+    if (g_config.intervalMin > g_config.intervalMax)
     {
-        int tmp = g_config.minInterval;
-        g_config.minInterval = g_config.maxInterval;
-        g_config.maxInterval = tmp;
+        int tmp = g_config.intervalMin;
+        g_config.intervalMin = g_config.intervalMax;
+        g_config.intervalMax = tmp;
     }
     if (g_config.pressDelayMin > g_config.pressDelayMax)
     {
@@ -142,17 +176,30 @@ static void LoadConfig()
         g_config.pressDelayMin = g_config.pressDelayMax;
         g_config.pressDelayMax = tmp;
     }
+    if (g_config.precisionMinX > g_config.precisionMaxX)
+    {
+        int tmp = g_config.precisionMinX;
+        g_config.precisionMinX = g_config.precisionMaxX;
+        g_config.precisionMaxX = tmp;
+    }
+    if (g_config.precisionMinY > g_config.precisionMaxY)
+    {
+        int tmp = g_config.precisionMinY;
+        g_config.precisionMinY = g_config.precisionMaxY;
+        g_config.precisionMaxY = tmp;
+    }
 }
 
 // Возвращает следующий интервал между кликами (мс): фиксированный либо
 // случайное значение в диапазоне [min, max].
 static int GetNextInterval()
 {
-    if (g_config.useRandom)
+    if (g_config.mode == ClickMode::Random)
     {
-        int range = g_config.maxInterval - g_config.minInterval + 1;
-        return g_config.minInterval + (rand() % range);
+        int range = g_config.intervalMax - g_config.intervalMin + 1;
+        return g_config.intervalMin + (rand() % range);
     }
+    // Fixed и Precision используют фиксированный интервал
     return g_config.fixedInterval;
 }
 
@@ -216,6 +263,16 @@ static void UpdateMousePosition()
 // ---------------------------------------------------------------------------
 static void SimulateMouseClick()
 {
+    // В режиме precision кликаем в случайной точке заданного прямоугольника
+    if (g_config.mode == ClickMode::Precision)
+    {
+        int rangeX = g_config.precisionMaxX - g_config.precisionMinX + 1;
+        int rangeY = g_config.precisionMaxY - g_config.precisionMinY + 1;
+        int x = g_config.precisionMinX + (rand() % rangeX);
+        int y = g_config.precisionMinY + (rand() % rangeY);
+        SetCursorPos(x, y); // перемещаем курсор в точку внутри области
+    }
+
     INPUT input = {};
     input.type = INPUT_MOUSE;
 
@@ -338,8 +395,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             // Текущий режим
             wchar_t modeText[128];
-            if (g_config.useRandom)
+            if (g_config.mode == ClickMode::Random)
                 wsprintfW(modeText, L"Mode:  random");
+            else if (g_config.mode == ClickMode::Precision)
+                wsprintfW(modeText, L"Mode:  precision");
             else
                 wsprintfW(modeText, L"Mode:  fixed");
             TextOutW(hdc, 20, y, modeText, lstrlenW(modeText));
@@ -347,10 +406,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             // Текущий режим и интервал
             wchar_t intervalText[128];
-            if (g_config.useRandom)
+            if (g_config.mode == ClickMode::Random)
             {
                 wsprintfW(intervalText, L"Интервал:  %d-%d мс (случайный)",
-                          g_config.minInterval, g_config.maxInterval);
+                          g_config.intervalMin, g_config.intervalMax);
             }
             else
             {
@@ -359,6 +418,17 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             TextOutW(hdc, 20, y, intervalText, lstrlenW(intervalText));
             y += lineHeight;
+
+            // В режиме precision показываем область кликов
+            if (g_config.mode == ClickMode::Precision)
+            {
+                wchar_t rectText[160];
+                wsprintfW(rectText, L"Область:  X %d-%d   Y %d-%d",
+                          g_config.precisionMinX, g_config.precisionMaxX,
+                          g_config.precisionMinY, g_config.precisionMaxY);
+                TextOutW(hdc, 20, y, rectText, lstrlenW(rectText));
+                y += lineHeight;
+            }
 
             wchar_t clicks[128];
             wsprintfW(clicks, L"Отправлено кликов: %ld", g_clickCount);
@@ -401,7 +471,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     LoadConfig();
     srand((unsigned)GetTickCount());
 
-    const wchar_t CLASS_NAME[] = L"MouseSpaceTrackerWindow";
+    const wchar_t CLASS_NAME[] = L"AutoClickerCppWindow";
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = WindowProc;
@@ -415,9 +485,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
     HWND hwnd = CreateWindowExW(
         0,
         CLASS_NAME,
-        L"Автокликер (WinAPI)",
+        L"AutoClickerCpp",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 560, 320,
+        CW_USEDEFAULT, CW_USEDEFAULT, 560, 400,
         NULL, NULL, hInstance, NULL
     );
 
@@ -426,8 +496,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
         return 0;
     }
 
-    ShowWindow(hwnd, nCmdShow);
-    UpdateWindow(hwnd);
+    // Показываем окно только если включён флаг show_debug_window.
+    // Цикл сообщений всё равно нужен — на нём работает хук клавиатуры.
+    if (g_config.showDebugWindow)
+    {
+        ShowWindow(hwnd, nCmdShow);
+        UpdateWindow(hwnd);
+    }
 
     // Цикл сообщений (необходим и для работы хука клавиатуры)
     MSG msg = {};
