@@ -1,8 +1,8 @@
 // ============================================================================
 //  AutoClickerCpp (WinAPI)
-//  - Показывает точные координаты курсора (GetCursorPos) в реальном времени
-//  - ПРОБЕЛ включает/выключает имитацию кликов мыши (хук WH_KEYBOARD_LL)
-//  - Режимы: fixed / random / precision, настройка через config.ini
+//  - Displays the exact cursor coordinates (GetCursorPos) in real time
+//  - SPACE toggles the mouse click simulation (WH_KEYBOARD_LL hook)
+//  - Modes: fixed / random / precision, configured via config.ini
 // ============================================================================
 
 #ifndef UNICODE
@@ -20,7 +20,7 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
-// Конфигурация автокликера (читается из config.ini рядом с исполняемым файлом)
+// Auto-clicker configuration (read from config.ini next to the executable)
 // ---------------------------------------------------------------------------
 enum class ClickMode
 {
@@ -32,41 +32,41 @@ enum class ClickMode
 struct ClickConfig
 {
     ClickMode mode       = ClickMode::Fixed;
-    int  fixedInterval   = 100;   // fixed_interval, мс
-    int  intervalMin     = 50;    // interval_min, мс
-    int  intervalMax     = 200;   // interval_max, мс
-    int  pressDelayMin   = 10;    // down_delay_min, мс
-    int  pressDelayMax   = 50;    // down_delay_max, мс
+    int  fixedInterval   = 100;   // fixed_interval, ms
+    int  intervalMin     = 50;    // interval_min, ms
+    int  intervalMax     = 200;   // interval_max, ms
+    int  pressDelayMin   = 10;    // down_delay_min, ms
+    int  pressDelayMax   = 50;    // down_delay_max, ms
 
-    // precision-режим: прямоугольная область для кликов (экранные координаты)
+    // precision mode: rectangular area for clicks (screen coordinates)
     int  precisionMinX   = 0;
     int  precisionMinY   = 0;
     int  precisionMaxX   = 800;
     int  precisionMaxY   = 600;
 
-    bool showDebugWindow = true;  // показывать окно приложения
+    bool showDebugWindow = true;  // show the application window
 };
 
 static ClickConfig g_config;
 
 // ---------------------------------------------------------------------------
-// Глобальное состояние приложения
+// Global application state
 // ---------------------------------------------------------------------------
-static POINT    g_mousePos         = { 0, 0 }; // текущие координаты курсора
+static POINT    g_mousePos         = { 0, 0 }; // current cursor coordinates
 
-static bool     g_autoClickEnabled = false;    // включён ли автоклик
-static long     g_clickCount       = 0;        // сколько кликов отправлено
+static bool     g_autoClickEnabled = false;    // whether auto-click is enabled
+static long     g_clickCount       = 0;        // how many clicks have been sent
 
-static HHOOK    g_keyboardHook     = NULL;     // дескриптор хука клавиатуры
-static HWND     g_hwnd             = NULL;     // окно приложения
+static HHOOK    g_keyboardHook     = NULL;     // keyboard hook handle
+static HWND     g_hwnd             = NULL;     // application window
 
-static const UINT_PTR TIMER_ID       = 1;      // таймер координат
-static const UINT     TIMER_MS       = 15;     // период опроса координат (мс)
-static const UINT_PTR TIMER_CLICK_ID = 2;      // таймер кликов
+static const UINT_PTR TIMER_ID       = 1;      // coordinate timer
+static const UINT     TIMER_MS       = 15;     // coordinate polling period (ms)
+static const UINT_PTR TIMER_CLICK_ID = 2;      // click timer
 
 
 // ---------------------------------------------------------------------------
-// Парсинг config.ini
+// config.ini parsing
 // ---------------------------------------------------------------------------
 static std::string Trim(const std::string& s)
 {
@@ -84,7 +84,7 @@ static std::string ToLower(std::string s)
     return s;
 }
 
-// Путь к config.ini — в папке рядом с exe
+// Path to config.ini — in the folder next to the exe
 static std::filesystem::path GetConfigPath()
 {
     wchar_t buf[MAX_PATH];
@@ -92,7 +92,7 @@ static std::filesystem::path GetConfigPath()
     return std::filesystem::path(buf).parent_path() / L"config.ini";
 }
 
-// Читает config.ini; при его отсутствии/ошибках остаются значения по умолчанию
+// Reads config.ini; on missing file/errors the defaults remain
 static void LoadConfig()
 {
     std::ifstream file(GetConfigPath());
@@ -102,12 +102,12 @@ static void LoadConfig()
     std::string line;
     while (std::getline(file, line))
     {
-        // отрезаем комментарий (; или #)
+        // strip the comment (; or #)
         size_t comment = line.find_first_of(";#");
         if (comment != std::string::npos)
             line = line.substr(0, comment);
 
-        // ищем разделитель '='
+        // find the '=' separator
         size_t eq = line.find('=');
         if (eq == std::string::npos)
             continue;
@@ -140,7 +140,7 @@ static void LoadConfig()
         else if (key == "down_delay_min")
         {
             int v = atoi(val.c_str());
-            if (v >= 0) g_config.pressDelayMin = v; // 0 тоже допустим (без задержки)
+            if (v >= 0) g_config.pressDelayMin = v; // 0 is also allowed (no delay)
         }
         else if (key == "down_delay_max")
         {
@@ -163,7 +163,7 @@ static void LoadConfig()
         }
     }
 
-    // Гарантируем корректные диапазоны min <= max
+    // Ensure correct min <= max ranges
     if (g_config.intervalMin > g_config.intervalMax)
     {
         int tmp = g_config.intervalMin;
@@ -190,8 +190,8 @@ static void LoadConfig()
     }
 }
 
-// Возвращает следующий интервал между кликами (мс): фиксированный либо
-// случайное значение в диапазоне [min, max].
+// Returns the next interval between clicks (ms): either fixed or
+// a random value in the [min, max] range.
 static int GetNextInterval()
 {
     if (g_config.mode == ClickMode::Random)
@@ -199,12 +199,12 @@ static int GetNextInterval()
         int range = g_config.intervalMax - g_config.intervalMin + 1;
         return g_config.intervalMin + (rand() % range);
     }
-    // Fixed и Precision используют фиксированный интервал
+    // Fixed and Precision use a fixed interval
     return g_config.fixedInterval;
 }
 
-// Возвращает случайную задержку между нажатием и отпусканием (мс)
-// в диапазоне [pressDelayMin, pressDelayMax].
+// Returns a random delay between press and release (ms)
+// in the [pressDelayMin, pressDelayMax] range.
 static int GetNextPressDelay()
 {
     int range = g_config.pressDelayMax - g_config.pressDelayMin + 1;
@@ -213,8 +213,8 @@ static int GetNextPressDelay()
 
 
 // ---------------------------------------------------------------------------
-// Низкоуровневый хук клавиатуры: фиксирует нажатия ПРОБЕЛА (VK_SPACE).
-// Работает глобально, даже когда окно не в фокусе.
+// Low-level keyboard hook: detects SPACE presses (VK_SPACE).
+// Works globally, even when the window is not focused.
 // ---------------------------------------------------------------------------
 LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
@@ -223,21 +223,21 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
         const KBDLLHOOKSTRUCT* p =
             reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
 
-        // Реагируем только на "клавиша нажата", игнорируем отпускание
+        // React only to "key down", ignoring key up
         if ((wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
             p->vkCode == VK_SPACE)
         {
-            // Пробел переключает имитацию кликов мыши: вкл <-> выкл
+            // Space toggles the mouse click simulation: on <-> off
             g_autoClickEnabled = !g_autoClickEnabled;
 
             if (g_autoClickEnabled)
             {
-                // Запускаем таймер кликов с первым интервалом
+                // Start the click timer with the first interval
                 SetTimer(g_hwnd, TIMER_CLICK_ID, GetNextInterval(), NULL);
             }
             else
             {
-                // Останавливаем таймер кликов
+                // Stop the click timer
                 KillTimer(g_hwnd, TIMER_CLICK_ID);
             }
         }
@@ -248,7 +248,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 
 
 // ---------------------------------------------------------------------------
-// Обновление координат курсора
+// Update the cursor coordinates
 // ---------------------------------------------------------------------------
 static void UpdateMousePosition()
 {
@@ -257,35 +257,35 @@ static void UpdateMousePosition()
 
 
 // ---------------------------------------------------------------------------
-// Имитация клика левой кнопкой мыши в текущей позиции курсора:
-// отправляет события MOUSE_BUTTON_DOWN (LEFTDOWN) и MOUSE_BUTTON_UP (LEFTUP)
-// через SendInput.
+// Simulate a left mouse button click at the current cursor position:
+// sends MOUSE_BUTTON_DOWN (LEFTDOWN) and MOUSE_BUTTON_UP (LEFTUP)
+// events via SendInput.
 // ---------------------------------------------------------------------------
 static void SimulateMouseClick()
 {
-    // В режиме precision кликаем в случайной точке заданного прямоугольника
+    // In precision mode, click at a random point of the given rectangle
     if (g_config.mode == ClickMode::Precision)
     {
         int rangeX = g_config.precisionMaxX - g_config.precisionMinX + 1;
         int rangeY = g_config.precisionMaxY - g_config.precisionMinY + 1;
         int x = g_config.precisionMinX + (rand() % rangeX);
         int y = g_config.precisionMinY + (rand() % rangeY);
-        SetCursorPos(x, y); // перемещаем курсор в точку внутри области
+        SetCursorPos(x, y); // move the cursor to a point inside the area
     }
 
     INPUT input = {};
     input.type = INPUT_MOUSE;
 
-    // MOUSE_BUTTON_DOWN — кнопка нажата
+    // MOUSE_BUTTON_DOWN — button pressed
     input.mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
     SendInput(1, &input, sizeof(INPUT));
 
-    // Случайная задержка между нажатием и отпусканием (как у реального клика)
+    // Random delay between press and release (like a real click)
     int pressDelay = GetNextPressDelay();
     if (pressDelay > 0)
         Sleep(pressDelay);
 
-    // MOUSE_BUTTON_UP — кнопка отпущена
+    // MOUSE_BUTTON_UP — button released
     input.mi.dwFlags = MOUSEEVENTF_LEFTUP;
     SendInput(1, &input, sizeof(INPUT));
 
@@ -294,7 +294,7 @@ static void SimulateMouseClick()
 
 
 // ---------------------------------------------------------------------------
-// Обработчик окна
+// Window procedure
 // ---------------------------------------------------------------------------
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
@@ -304,7 +304,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             g_hwnd = hwnd;
 
-            // Устанавливаем низкоуровневый хук клавиатуры (глобальный)
+            // Install the low-level keyboard hook (global)
             g_keyboardHook = SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 LowLevelKeyboardProc,
@@ -314,11 +314,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
             if (!g_keyboardHook)
             {
-                MessageBoxW(hwnd, L"Не удалось установить хук клавиатуры.",
-                            L"Ошибка", MB_ICONERROR);
+                MessageBoxW(hwnd, L"Failed to install the keyboard hook.",
+                            L"Error", MB_ICONERROR);
             }
 
-            // Запускаем таймер для периодического опроса координат
+            // Start the timer for periodic coordinate polling
             SetTimer(hwnd, TIMER_ID, TIMER_MS, NULL);
             UpdateMousePosition();
             return 0;
@@ -329,11 +329,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (wParam == TIMER_ID)
             {
                 UpdateMousePosition();
-                InvalidateRect(hwnd, NULL, FALSE); // запросить перерисовку
+                InvalidateRect(hwnd, NULL, FALSE); // request a redraw
             }
             else if (wParam == TIMER_CLICK_ID)
             {
-                // Если автоклик включён — отправляем клик и перепланируем таймер
+                // If auto-click is enabled — send a click and reschedule the timer
                 if (g_autoClickEnabled)
                 {
                     SimulateMouseClick();
@@ -348,12 +348,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
 
-            // Тёмный фон
+            // Dark background
             HBRUSH bg = CreateSolidBrush(RGB(30, 30, 30));
             FillRect(hdc, &ps.rcPaint, bg);
             DeleteObject(bg);
 
-            // Цвет и шрифт текста
+            // Text color and font
             SetTextColor(hdc, RGB(0, 255, 120));
             SetBkMode(hdc, TRANSPARENT);
 
@@ -368,19 +368,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             const int lineHeight = 36;
 
             wchar_t title[128];
-            wsprintfW(title, L"..::-Автокликер-::..");
+            wsprintfW(title, L"..::-AutoClicker-::..");
             TextOutW(hdc, 20, y, title, lstrlenW(title));
             y += lineHeight + 10;
 
             wchar_t coords[128];
-            wsprintfW(coords, L"Координаты мыши:  X = %ld   Y = %ld",
+            wsprintfW(coords, L"Mouse coordinates:  X = %ld   Y = %ld",
                       g_mousePos.x, g_mousePos.y);
             TextOutW(hdc, 20, y, coords, lstrlenW(coords));
             y += lineHeight;
 
-            // Состояние автоклика
-            const wchar_t* autoOn  = L"Автоклик (клавиша Space):  ВКЛ";
-            const wchar_t* autoOff = L"Автоклик (клавиша Space):  ВЫКЛ";
+            // Auto-click state
+            const wchar_t* autoOn  = L"Auto-click (Space key):  ON";
+            const wchar_t* autoOff = L"Auto-click (Space key):  OFF";
             if (g_autoClickEnabled)
             {
                 SetTextColor(hdc, RGB(255, 90, 90));
@@ -393,7 +393,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
             y += lineHeight;
 
-            // Текущий режим
+            // Current mode
             wchar_t modeText[128];
             if (g_config.mode == ClickMode::Random)
                 wsprintfW(modeText, L"Mode:  random");
@@ -404,26 +404,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             TextOutW(hdc, 20, y, modeText, lstrlenW(modeText));
             y += lineHeight;
 
-            // Текущий режим и интервал
+            // Current mode and interval
             wchar_t intervalText[128];
             if (g_config.mode == ClickMode::Random)
             {
-                wsprintfW(intervalText, L"Интервал:  %d-%d мс (случайный)",
+                wsprintfW(intervalText, L"Interval:  %d-%d ms (random)",
                           g_config.intervalMin, g_config.intervalMax);
             }
             else
             {
-                wsprintfW(intervalText, L"Интервал:  %d мс (фиксированный)",
+                wsprintfW(intervalText, L"Interval:  %d ms (fixed)",
                           g_config.fixedInterval);
             }
             TextOutW(hdc, 20, y, intervalText, lstrlenW(intervalText));
             y += lineHeight;
 
-            // В режиме precision показываем область кликов
+            // In precision mode, show the click area
             if (g_config.mode == ClickMode::Precision)
             {
                 wchar_t rectText[160];
-                wsprintfW(rectText, L"Область:  X %d-%d   Y %d-%d",
+                wsprintfW(rectText, L"Area:  X %d-%d   Y %d-%d",
                           g_config.precisionMinX, g_config.precisionMaxX,
                           g_config.precisionMinY, g_config.precisionMaxY);
                 TextOutW(hdc, 20, y, rectText, lstrlenW(rectText));
@@ -431,7 +431,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             }
 
             wchar_t clicks[128];
-            wsprintfW(clicks, L"Отправлено кликов: %ld", g_clickCount);
+            wsprintfW(clicks, L"Clicks sent: %ld", g_clickCount);
             TextOutW(hdc, 20, y, clicks, lstrlenW(clicks));
             y += lineHeight;
 
@@ -463,11 +463,11 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 
 
 // ---------------------------------------------------------------------------
-// Точка входа
+// Entry point
 // ---------------------------------------------------------------------------
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
 {
-    // Читаем настройки из config.ini и инициализируем ГПСЧ
+    // Read the settings from config.ini and seed the PRNG
     LoadConfig();
     srand((unsigned)GetTickCount());
 
@@ -487,7 +487,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
         CLASS_NAME,
         L"AutoClickerCpp",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 560, 400,
+        CW_USEDEFAULT, CW_USEDEFAULT, 680, 400,
         NULL, NULL, hInstance, NULL
     );
 
@@ -496,15 +496,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR, int nCmdShow)
         return 0;
     }
 
-    // Показываем окно только если включён флаг show_debug_window.
-    // Цикл сообщений всё равно нужен — на нём работает хук клавиатуры.
+    // Show the window only if the show_debug_window flag is enabled.
+    // The message loop is still needed — the keyboard hook runs on it.
     if (g_config.showDebugWindow)
     {
         ShowWindow(hwnd, nCmdShow);
         UpdateWindow(hwnd);
     }
 
-    // Цикл сообщений (необходим и для работы хука клавиатуры)
+    // Message loop (also required for the keyboard hook to work)
     MSG msg = {};
     while (GetMessageW(&msg, NULL, 0, 0) > 0)
     {
